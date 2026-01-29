@@ -300,3 +300,14 @@ if ('Notification' in window) {
 // ページ読み込み時 join
 // =========================
 if (username && userId) joinServer();
+
+// =========================
+// Service Worker 登録 (PWA対応)
+// =========================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(reg => console.log("Service Worker registered", reg))
+      .catch(err => console.error("SW registration failed", err));
+  });
+                }
