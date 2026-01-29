@@ -1,229 +1,259 @@
-// ===== socket =====
 const socket = io();
 
-// ===== DOM =====
-const messages = document.getElementById("messages");
-const input = document.getElementById("m");
-const sendBtn = document.getElementById("send");
-const userList = document.getElementById("userList");
-const onlineCount = document.getElementById("onlineCount");
+/* =========================
+   IndexedDB 設定
+========================= */
+
+const DB_NAME = "chatAppDB";
+const STORE_NAME = "userStore";
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror = () => reject("DB open failed");
+  });
+}
+
+async function saveUserToDB(user) {
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  tx.objectStore(STORE_NAME).put(user, "profile");
+}
+
+async function loadUserFromDB() {
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, "readonly");
+  return new Promise(resolve => {
+    const req = tx.objectStore(STORE_NAME).get("profile");
+    req.onsuccess = () => resolve(req.result || null);
+  });
+}
+
+/* =========================
+   DOM
+========================= */
+
 const setupPanel = document.getElementById("setupPanel");
+const usernameInput = document.getElementById("usernameInput");
+const colorInput = document.getElementById("colorInput");
+const avatarInput = document.getElementById("avatarInput");
+const saveSettingsBtn = document.getElementById("saveSettings");
+const cancelSetupBtn = document.getElementById("cancelSetup");
+const openSettingsBtn = document.getElementById("openSettings");
 
-// ===== ユーザー情報 =====
-let user = null;
+const messagesEl = document.getElementById("messages");
+const userListEl = document.getElementById("userList");
+const onlineCountEl = document.getElementById("onlineCount");
+const inputEl = document.getElementById("m");
+const sendBtn = document.getElementById("send");
 
-// userId を永続化（名前変えても同一人物）
-let userId = localStorage.getItem("userId");
-if (!userId) {
-  userId = crypto.randomUUID();
-  localStorage.setItem("userId", userId);
-}
+/* =========================
+   ユーザー情報
+========================= */
 
-// 最終アクセス時間（通知用）
-let lastAccess = Number(localStorage.getItem("lastAccess") || Date.now());
-localStorage.setItem("lastAccess", Date.now());
+let userId = crypto.randomUUID();
+let username = "";
+let color = "#00b900";
+let avatar = null;
 
-// ===== PWA / Service Worker =====
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js");
-}
+/* =========================
+   初期化
+========================= */
 
-// 通知許可
-async function requestNotifyPermission() {
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "default") {
-    await Notification.requestPermission();
+(async function init() {
+  const saved = await loadUserFromDB();
+
+  if (saved) {
+    userId = saved.userId;
+    username = saved.name;
+    color = saved.color;
+    avatar = saved.avatar;
+
+    setupPanel.style.display = "none";
+    socket.emit("userJoin", { userId, name: username, color, avatar });
+  } else {
+    setupPanel.style.display = "flex";
   }
-}
-requestNotifyPermission();
+})();
 
-// ===== 初期設定 =====
-function openSetup(force = false) {
-  if (user && !force) return;
-  setupPanel.style.display = "flex";
-}
+/* =========================
+   Avatar 読み込み
+========================= */
 
-document.getElementById("saveSettings").onclick = async () => {
-  const name = document.getElementById("usernameInput").value.trim();
-  const color = document.getElementById("colorInput").value;
-  const avatarFile = document.getElementById("avatarInput").files[0];
+avatarInput.addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
 
-  if (!name) return alert("名前を入力してください");
-
-  let avatar = null;
-  if (avatarFile) {
-    avatar = await fileToBase64(avatarFile);
-  }
-
-  user = { id: userId, name, color, avatar };
-  localStorage.setItem("user", JSON.stringify(user));
-
-  setupPanel.style.display = "none";
-  socket.emit("userJoin", user);
-};
-
-document.getElementById("cancelSetup").onclick = () => {
-  setupPanel.style.display = "none";
-};
-
-document.getElementById("openSettings").onclick = () => {
-  openSetup(true);
-};
-
-// ===== localStorage から復元 =====
-const savedUser = localStorage.getItem("user");
-if (savedUser) {
-  user = JSON.parse(savedUser);
-  socket.emit("userJoin", user);
-} else {
-  openSetup();
-}
-
-// ===== メッセージ送信 =====
-sendBtn.onclick = sendMessage;
-input.addEventListener("keydown", e => {
-  if (e.key === "Enter") sendMessage();
+  const reader = new FileReader();
+  reader.onload = () => {
+    avatar = reader.result;
+  };
+  reader.readAsDataURL(file);
 });
 
-function sendMessage() {
-  if (!input.value.trim() || !user) return;
+/* =========================
+   設定保存
+========================= */
 
-  const msg = {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    name: user.name,
-    color: user.color,
-    avatar: user.avatar,
-    text: input.value,
-    time: Date.now()
+saveSettingsBtn.addEventListener("click", async () => {
+  const name = usernameInput.value.trim();
+  if (!name) return alert("名前を入力してください");
+
+  username = name;
+  color = colorInput.value;
+
+  const userData = {
+    userId,
+    name: username,
+    color,
+    avatar,
+    lastAccess: Date.now()
   };
 
-  socket.emit("chat message", msg);
-  input.value = "";
-}
+  await saveUserToDB(userData);
 
-// ===== メッセージ描画 =====
-function renderMessage(msg, isHistory = false) {
-  const li = document.createElement("li");
+  socket.emit("userJoin", { userId, name: username, color, avatar });
+  setupPanel.style.display = "none";
+});
+
+cancelSetupBtn.addEventListener("click", () => {
+  if (!username) {
+    alert("名前を入力してください");
+    return;
+  }
+  setupPanel.style.display = "none";
+});
+
+openSettingsBtn.addEventListener("click", () => {
+  usernameInput.value = username;
+  colorInput.value = color;
+  avatarInput.value = "";
+  setupPanel.style.display = "flex";
+});
+
+/* =========================
+   メッセージ生成
+========================= */
+
+function makeMessageEl(msg) {
   const isSelf = msg.userId === userId;
 
+  const li = document.createElement("li");
   li.className = `message ${isSelf ? "right" : "left"}`;
   li.dataset.id = msg.id;
 
-  // icon
-  const icon = document.createElement("div");
-  icon.className = "icon";
-  if (msg.avatar) {
-    icon.style.background = "none";
-    icon.innerHTML = `<img src="${msg.avatar}" style="width:100%;height:100%;border-radius:50%">`;
-  } else {
-    icon.style.background = msg.color;
-    icon.textContent = msg.name[0];
-  }
+  const icon = msg.avatar
+    ? `<img class="icon" src="${msg.avatar}">`
+    : `<div class="icon" style="background:${msg.color}">
+         ${msg.name.slice(0, 2).toUpperCase()}
+       </div>`;
 
-  // meta
-  const meta = document.createElement("div");
-  meta.className = "meta";
+  const tools = isSelf
+    ? `<div class="msg-tools">
+         <button class="msg-button delete">🗑</button>
+       </div>`
+    : "";
 
-  const name = document.createElement("div");
-  name.className = "msg-name";
-  name.style.color = msg.color;
-  name.textContent = msg.name;
+  li.innerHTML = `
+    ${icon}
+    <div class="meta">
+      <div class="msg-name" style="color:${msg.color}">${escapeHtml(msg.name)}</div>
+      <div class="bubble">${escapeHtml(msg.text)}</div>
+    </div>
+    ${tools}
+  `;
 
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = msg.text;
-
-  meta.appendChild(name);
-  meta.appendChild(bubble);
-
-  li.appendChild(icon);
-  li.appendChild(meta);
-
-  // 削除（自分のメッセージのみ）
   if (isSelf) {
-    const tools = document.createElement("div");
-    tools.className = "msg-tools";
-
-    const del = document.createElement("button");
-    del.className = "msg-button";
-    del.textContent = "削除";
-    del.onclick = () => {
+    li.querySelector(".delete").onclick = () => {
       socket.emit("requestDelete", msg.id);
     };
-
-    tools.appendChild(del);
-    li.appendChild(tools);
   }
 
-  messages.appendChild(li);
-  messages.scrollTop = messages.scrollHeight;
-
-  // ===== 通知判定 =====
-  if (
-    !isSelf &&
-    !isHistory &&
-    msg.time > lastAccess &&
-    document.visibilityState !== "visible" &&
-    navigator.serviceWorker.controller
-  ) {
-    navigator.serviceWorker.controller.postMessage({
-      type: "NOTIFY",
-      text: `${msg.name}: ${msg.text}`
-    });
-  }
+  return li;
 }
 
-// ===== socket events =====
-socket.on("history", data => {
-  data.forEach(msg => renderMessage(msg, true));
+/* =========================
+   socket.io
+========================= */
+
+socket.on("history", msgs => {
+  messagesEl.innerHTML = "";
+  msgs.forEach(m => messagesEl.appendChild(makeMessageEl(m)));
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 });
 
 socket.on("chat message", msg => {
-  renderMessage(msg);
-});
-
-socket.on("delete message", id => {
-  const el = messages.querySelector(`[data-id="${id}"]`);
-  if (el) el.remove();
+  messagesEl.appendChild(makeMessageEl(msg));
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 });
 
 socket.on("userList", list => {
-  userList.innerHTML = "";
-  onlineCount.textContent = `オンライン: ${list.length}`;
+  userListEl.innerHTML = "";
+  onlineCountEl.textContent = `オンライン: ${list.length}`;
 
   list.forEach(u => {
-    const item = document.createElement("div");
-    item.className = "user-item";
+    const div = document.createElement("div");
+    div.className = "user-item";
 
-    const img = document.createElement("div");
-    img.className = "uimg";
-    if (u.avatar) {
-      img.innerHTML = `<img src="${u.avatar}" style="width:100%;height:100%;border-radius:50%">`;
-    } else {
-      img.style.background = u.color;
-      img.style.color = "#fff";
-      img.style.display = "flex";
-      img.style.alignItems = "center";
-      img.style.justifyContent = "center";
-      img.textContent = u.name[0];
-    }
+    const img = u.avatar
+      ? `<img class="uimg" src="${u.avatar}">`
+      : `<div class="uimg" style="background:${u.color}">
+           ${u.name.slice(0, 2).toUpperCase()}
+         </div>`;
 
-    const name = document.createElement("div");
-    name.className = "uname";
-    name.textContent = u.name;
-
-    item.appendChild(img);
-    item.appendChild(name);
-    userList.appendChild(item);
+    div.innerHTML = `${img}<div class="uname">${escapeHtml(u.name)}</div>`;
+    userListEl.appendChild(div);
   });
 });
 
-// ===== utility =====
-function fileToBase64(file) {
-  return new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.readAsDataURL(file);
-  });
-     }
+socket.on("delete message", id => {
+  const el = messagesEl.querySelector(`[data-id="${id}"]`);
+  if (el) el.remove();
+});
+
+/* =========================
+   送信
+========================= */
+
+sendBtn.onclick = sendMessage;
+inputEl.onkeydown = e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    sendMessage();
+  }
+};
+
+function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  const msg = {
+    id: crypto.randomUUID(),
+    userId,
+    name: username,
+    color,
+    avatar,
+    text
+  };
+
+  socket.emit("chat message", msg);
+  inputEl.value = "";
+}
+
+/* =========================
+   util
+========================= */
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
