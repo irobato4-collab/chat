@@ -257,3 +257,15 @@ function escapeHtml(s) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
+
+/* =========================
+   Service Worker 登録
+========================= */
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js")
+      .then(() => console.log("Service Worker registered"))
+      .catch(err => console.error("SW failed", err));
+  });
+}
