@@ -202,14 +202,21 @@ body {
   max-width: 100%;
 }
 
-/* 左（他人） */
-.message.left {
-  justify-content: flex-start;
+.message {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  max-width: 100%;
 }
 
-/* 右（自分） */
+/* 他人（左） */
+.message.left {
+  margin-right: auto;
+}
+
+/* 自分（右） */
 .message.right {
-  justify-content: flex-end;
+  margin-left: auto;
   flex-direction: row-reverse;
 }
 
