@@ -36,7 +36,7 @@ let username = localStorage.getItem(KEY_NAME) || "";
 let color = localStorage.getItem(KEY_COLOR) || "#00b900";
 let avatar = localStorage.getItem(KEY_AVATAR) || null;
 
-// userId は一度生成したら永続
+// 永続 userId（名前変更しても同一人物）
 let userId = localStorage.getItem(KEY_USERID);
 if (!userId) {
   userId = crypto.randomUUID();
@@ -44,7 +44,7 @@ if (!userId) {
 }
 
 /* =========================
-   Notification permission
+   Notification（LINE風）
 ========================= */
 if ("Notification" in window) {
   if (Notification.permission === "default") {
@@ -53,7 +53,7 @@ if ("Notification" in window) {
 }
 
 /* =========================
-   setup
+   setup panel
 ========================= */
 function showSetupIfNeeded() {
   if (username && color) {
@@ -67,7 +67,7 @@ function showSetupIfNeeded() {
 }
 showSetupIfNeeded();
 
-/* avatar load */
+/* avatar */
 avatarInput.addEventListener("change", () => {
   const file = avatarInput.files[0];
   if (!file) return;
@@ -109,13 +109,14 @@ openSettingsBtn.addEventListener("click", () => {
    message render
 ========================= */
 function makeMessageEl(msg) {
-  const isSelf = msg.userId === userId;
+  const isSelf =
+    msg.userId === userId ||
+    (!msg.userId && msg.name === username); // 古い履歴対策
 
   const li = document.createElement("li");
   li.className = `message ${isSelf ? "right" : "left"}`;
   li.dataset.id = msg.id;
 
-  // icon
   let icon;
   if (msg.avatar) {
     icon = `<img class="icon" src="${msg.avatar}">`;
@@ -124,12 +125,11 @@ function makeMessageEl(msg) {
     icon = `<div class="icon" style="background:${msg.color}">${ini}</div>`;
   }
 
-  // delete tool
   let tools = "";
   if (isSelf) {
     tools = `
       <div class="msg-tools">
-        <button class="msg-button delete">🗑</button>
+        <button class="msg-button delete" title="削除">🗑</button>
       </div>
     `;
   }
@@ -214,7 +214,7 @@ socket.on("chat message", (msg) => {
 });
 
 /* =========================
-   delete
+   delete reflect
 ========================= */
 socket.on("delete message", (id) => {
   const el = messagesEl.querySelector(`[data-id="${id}"]`);
@@ -236,7 +236,12 @@ socket.on("userList", (list) => {
       ? `<img class="uimg" src="${u.avatar}">`
       : `<div class="uimg" style="background:${u.color};color:#fff;display:flex;align-items:center;justify-content:center">${u.name[0]}</div>`;
 
-    div.innerHTML = `${img}<div class="uname" style="color:${u.color}">${escapeHtml(u.name)}</div>`;
+    div.innerHTML = `
+      ${img}
+      <div class="uname" style="color:${u.color}">
+        ${escapeHtml(u.name)}
+      </div>
+    `;
     userListEl.appendChild(div);
   });
 });
@@ -244,9 +249,9 @@ socket.on("userList", (list) => {
 /* =========================
    send
 ========================= */
-sendBtn.onclick = sendMessage;
-inputEl.addEventListener("keydown", e => {
-  if (e.key === "Enter") {
+sendBtn.addEventListener("click", sendMessage);
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
   }
@@ -267,4 +272,4 @@ function sendMessage() {
   });
 
   inputEl.value = "";
-}
+                                    }
