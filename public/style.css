@@ -82,3 +82,9 @@ body{
   .user-list{overflow:auto}
   .message{max-width:86%}
 }
+.msg-time{
+  font-size:11px;
+  color:#888;
+  margin-left:6px;
+  font-weight:400;
+}
