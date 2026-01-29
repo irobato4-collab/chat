@@ -1,54 +1,54 @@
-// ==========================
-// 必要モジュール
-// ==========================
+/* =========================
+   modules
+========================= */
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const fs = require("fs");
 const webpush = require("web-push");
 
-// ==========================
-// 環境変数（Renderで設定）
-// ==========================
+/* =========================
+   environment
+========================= */
 const PORT = process.env.PORT || 3000;
+const ENTRY_PASSWORD = process.env.ENTRY_PASSWORD;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 
-// ==========================
-// web-push 初期化
-// ==========================
+/* =========================
+   web-push setup
+========================= */
 webpush.setVapidDetails(
   "mailto:admin@example.com",
   VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY
 );
 
-// ==========================
-// app / server
-// ==========================
+/* =========================
+   app / server
+========================= */
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// ==========================
-// middleware
-// ==========================
+/* =========================
+   middleware
+========================= */
 app.use(express.json());
 app.use(express.static("public"));
 
-// ==========================
-// 保存ファイル
-// ==========================
+/* =========================
+   files
+========================= */
 const MESSAGE_FILE = "messages.json";
 const SUB_FILE = "subscriptions.json";
 const MAX_MESSAGES = 100;
 
-// ==========================
-// util
-// ==========================
+/* =========================
+   utils
+========================= */
 function loadJSON(file, def) {
   if (!fs.existsSync(file)) {
     fs.writeFileSync(file, JSON.stringify(def, null, 2));
@@ -65,47 +65,56 @@ function saveJSON(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-// ==========================
-// データ
-// ==========================
+/* =========================
+   data
+========================= */
 let messages = loadJSON(MESSAGE_FILE, []);
 let subscriptions = loadJSON(SUB_FILE, []);
-let users = {}; // socket.id -> { userId, name, color, avatar }
+let users = {}; // socket.id -> user
 
-// ==========================
-// Push通知送信
-// ==========================
-async function sendPushNotification(payload) {
+/* =========================
+   entry password check
+========================= */
+app.post("/check-password", (req, res) => {
+  const { password } = req.body;
+  res.json({ ok: password === ENTRY_PASSWORD });
+});
+
+/* =========================
+   push subscribe
+========================= */
+app.post("/subscribe", (req, res) => {
+  const sub = req.body;
+
+  if (!subscriptions.find(s => s.endpoint === sub.endpoint)) {
+    subscriptions.push(sub);
+    saveJSON(SUB_FILE, subscriptions);
+  }
+
+  res.status(201).json({ ok: true });
+});
+
+/* =========================
+   push send
+========================= */
+async function sendPush(payload) {
   for (const sub of subscriptions) {
     try {
       await webpush.sendNotification(sub, JSON.stringify(payload));
-    } catch (e) {
-      // 無効なsubscription削除
+    } catch {
       subscriptions = subscriptions.filter(s => s !== sub);
       saveJSON(SUB_FILE, subscriptions);
     }
   }
 }
 
-// ==========================
-// Push購読登録
-// ==========================
-app.post("/subscribe", (req, res) => {
-  const sub = req.body;
-  if (!subscriptions.find(s => s.endpoint === sub.endpoint)) {
-    subscriptions.push(sub);
-    saveJSON(SUB_FILE, subscriptions);
-  }
-  res.status(201).json({ ok: true });
-});
-
-// ==========================
-// socket.io
-// ==========================
+/* =========================
+   socket.io
+========================= */
 io.on("connection", (socket) => {
   console.log("connect:", socket.id);
 
-  // 履歴
+  // 履歴送信
   socket.emit("history", messages);
 
   // ユーザー参加
@@ -114,7 +123,7 @@ io.on("connection", (socket) => {
     io.emit("userList", Object.values(users));
   });
 
-  // メッセージ送信
+  // メッセージ受信
   socket.on("chat message", async (msg) => {
     const fullMsg = {
       ...msg,
@@ -122,15 +131,13 @@ io.on("connection", (socket) => {
     };
 
     messages.push(fullMsg);
-    if (messages.length > MAX_MESSAGES) {
-      messages.shift();
-    }
+    if (messages.length > MAX_MESSAGES) messages.shift();
 
     saveJSON(MESSAGE_FILE, messages);
     io.emit("chat message", fullMsg);
 
-    // Push通知（送信者以外が対象）
-    await sendPushNotification({
+    // Push通知
+    await sendPush({
       title: "新しいメッセージ",
       body: `${msg.name}: ${msg.text}`,
       time: fullMsg.time
@@ -150,26 +157,28 @@ io.on("connection", (socket) => {
     io.emit("delete message", id);
   });
 
-  // 管理者 全削除
+  // 管理者：全削除
   socket.on("adminClearAll", (password) => {
     if (password !== ADMIN_PASSWORD) {
       socket.emit("adminClearFailed", "password error");
       return;
     }
+
     messages = [];
     saveJSON(MESSAGE_FILE, messages);
     io.emit("clearAllMessages");
   });
 
+  // 切断
   socket.on("disconnect", () => {
     delete users[socket.id];
     io.emit("userList", Object.values(users));
   });
 });
 
-// ==========================
-// 起動
-// ==========================
+/* =========================
+   start
+========================= */
 server.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("Server running on port", PORT);
 });
