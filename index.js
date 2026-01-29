@@ -112,7 +112,15 @@ async function sendPush(payload) {
    socket.io
 ========================= */
 io.on("connection", (socket) => {
-  console.log("connect:", socket.id);
+  const auth = socket.handshake.auth?.auth;
+
+  if (auth !== "ok") {
+    console.log("unauthorized socket");
+    socket.disconnect(true);
+    return;
+  }
+
+  console.log("authorized:", socket.id);
 
   // 履歴送信
   socket.emit("history", messages);
