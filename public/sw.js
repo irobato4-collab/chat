@@ -1,82 +1,72 @@
-/* =========================
-   Service Worker
-========================= */
-
-const CACHE_NAME = "chat-pwa-v1";
-const OFFLINE_URLS = [
+const CACHE_NAME = "chatapp-cache-v1";
+const urlsToCache = [
   "/",
   "/index.html",
   "/style.css",
   "/client.js",
-  "/socket.io/socket.io.js",
-  "/manifest.json"
+  "/manifest.json",
+  "/favicon.ico"
 ];
 
-/* ===== インストール ===== */
-self.addEventListener("install", (event) => {
-  self.skipWaiting();
+// インストール時にキャッシュ
+self.addEventListener("install", event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(OFFLINE_URLS))
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(urlsToCache);
+    })
   );
+  self.skipWaiting();
 });
 
-/* ===== 有効化 ===== */
-self.addEventListener("activate", (event) => {
+// アクティベート時に古いキャッシュ削除
+self.addEventListener("activate", event => {
   event.waitUntil(
-    caches.keys().then(keys =>
+    caches.keys().then(keys => 
       Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+        keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
       )
     )
   );
   self.clients.claim();
 });
 
-/* ===== fetch（オフライン対応） ===== */
-self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
-
+// ネットワーク優先、オフラインならキャッシュ
+self.addEventListener("fetch", event => {
   event.respondWith(
     fetch(event.request)
       .then(res => {
-        const clone = res.clone();
-        caches.open(CACHE_NAME).then(cache => {
-          cache.put(event.request, clone);
-        });
+        // 更新されたらキャッシュに保存
+        const resClone = res.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, resClone));
         return res;
       })
       .catch(() => caches.match(event.request))
   );
 });
 
-/* ===== Push通知 ===== */
-self.addEventListener("push", (event) => {
-  if (!event.data) return;
-
-  const data = event.data.json();
+// Push通知受信
+self.addEventListener("push", event => {
+  let data = { title: "New message", body: "メッセージが届きました" };
+  if (event.data) {
+    data = event.data.json();
+  }
 
   const options = {
     body: data.body,
-    icon: "/icons/icon-192.png",
-    badge: "/icons/badge.png",
-    data: {
-      time: data.time || Date.now()
-    }
+    icon: "/favicon.ico",
+    badge: "/favicon.ico"
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title || "新着メッセージ", options)
-  );
+  event.waitUntil(self.registration.showNotification(data.title, options));
 });
 
-/* ===== 通知クリック ===== */
-self.addEventListener("notificationclick", (event) => {
+// 通知クリックでアプリをフォーカス
+self.addEventListener("notificationclick", event => {
   event.notification.close();
-
   event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
-      for (const c of list) {
-        if (c.url.includes("/") && "focus" in c) return c.focus();
+    clients.matchAll({ type: "window" }).then(clientList => {
+      for (const client of clientList) {
+        if ("focus" in client) return client.focus();
       }
       if (clients.openWindow) return clients.openWindow("/");
     })
