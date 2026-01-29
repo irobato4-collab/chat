@@ -1,192 +1,152 @@
-/* =========================
-   modules
-========================= */
+require('dotenv').config(); // 環境変数読み込み
 const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+const app = express();
+const http = require("http").createServer(app);
+const io = require("socket.io")(http);
 const fs = require("fs");
+const path = require("path");
 const webpush = require("web-push");
 
-/* =========================
-   environment
-========================= */
-const PORT = process.env.PORT || 3000;
-const ENTRY_PASSWORD = process.env.ENTRY_PASSWORD;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+// =========================
+// 環境変数
+// =========================
+const ENTRY_PASSWORD = process.env.ENTRY_PASSWORD || "changeme"; // 管理者パスワード
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC || "";
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE || "";
 
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-
-/* =========================
-   web-push setup
-========================= */
 webpush.setVapidDetails(
   "mailto:admin@example.com",
-  VAPID_PUBLIC_KEY,
-  VAPID_PRIVATE_KEY
+  VAPID_PUBLIC,
+  VAPID_PRIVATE
 );
 
-/* =========================
-   app / server
-========================= */
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-/* =========================
-   middleware
-========================= */
-app.use(express.json());
-app.use(express.static("public"));
-
-/* =========================
-   files
-========================= */
-const MESSAGE_FILE = "messages.json";
-const SUB_FILE = "subscriptions.json";
+// =========================
+// 設定
+// =========================
+const FILE = "messages.json";
 const MAX_MESSAGES = 100;
 
-/* =========================
-   utils
-========================= */
-function loadJSON(file, def) {
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(def, null, 2));
-    return def;
-  }
+let users = {}; // socket.id -> { name, color, avatar, userId }
+let subscriptions = []; // push subscriptions
+
+app.use(express.static("public"));
+app.use(express.json());
+
+// =========================
+// messages.json 読み書き
+// =========================
+function loadMessages() {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return def;
+    if (!fs.existsSync(FILE)) { fs.writeFileSync(FILE,"[]"); return []; }
+    const raw = fs.readFileSync(FILE,"utf8");
+    if (!raw.trim()) return [];
+    return JSON.parse(raw);
+  } catch(e){
+    console.error("loadMessages error:",e);
+    fs.writeFileSync(FILE,"[]");
+    return [];
   }
 }
 
-function saveJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+function saveMessages(data) {
+  fs.writeFileSync(FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
-/* =========================
-   data
-========================= */
-let messages = loadJSON(MESSAGE_FILE, []);
-let subscriptions = loadJSON(SUB_FILE, []);
-let users = {}; // socket.id -> user
+// 起動時に100件以上削除
+(function normalizeMessages() {
+  let data = loadMessages();
+  if (data.length > MAX_MESSAGES) {
+    data = data.slice(data.length - MAX_MESSAGES);
+    saveMessages(data);
+  }
+})();
 
-/* =========================
-   entry password check
-========================= */
-app.post("/check-password", (req, res) => {
-  const { password } = req.body;
-  res.json({ ok: password === ENTRY_PASSWORD });
-});
-
-/* =========================
-   push subscribe
-========================= */
+// =========================
+// Web Push Subscription
+// =========================
 app.post("/subscribe", (req, res) => {
   const sub = req.body;
-
-  if (!subscriptions.find(s => s.endpoint === sub.endpoint)) {
-    subscriptions.push(sub);
-    saveJSON(SUB_FILE, subscriptions);
-  }
-
-  res.status(201).json({ ok: true });
+  subscriptions.push(sub);
+  res.status(201).json({});
 });
 
-/* =========================
-   push send
-========================= */
-async function sendPush(payload) {
-  for (const sub of subscriptions) {
-    try {
-      await webpush.sendNotification(sub, JSON.stringify(payload));
-    } catch {
-      subscriptions = subscriptions.filter(s => s !== sub);
-      saveJSON(SUB_FILE, subscriptions);
-    }
-  }
-}
-
-/* =========================
-   socket.io
-========================= */
+// =========================
+// socket.io
+// =========================
 io.on("connection", (socket) => {
-  const auth = socket.handshake.auth?.auth;
-
-  if (auth !== "ok") {
-    console.log("unauthorized socket");
-    socket.disconnect(true);
-    return;
-  }
-
-  console.log("authorized:", socket.id);
+  console.log("User connected:", socket.id);
 
   // 履歴送信
-  socket.emit("history", messages);
+  socket.emit("history", loadMessages());
 
   // ユーザー参加
   socket.on("userJoin", (user) => {
-    users[socket.id] = user;
+    users[socket.id] = {
+      name: user.name,
+      color: user.color,
+      avatar: user.avatar || null,
+      userId: user.userId
+    };
     io.emit("userList", Object.values(users));
   });
 
   // メッセージ受信
-  socket.on("chat message", async (msg) => {
-    const fullMsg = {
-      ...msg,
-      time: Date.now()
-    };
+  socket.on("chat message", (msg) => {
+    let data = loadMessages();
+    data.push(msg);
 
-    messages.push(fullMsg);
-    if (messages.length > MAX_MESSAGES) messages.shift();
+    while (data.length > MAX_MESSAGES) data.shift();
 
-    saveJSON(MESSAGE_FILE, messages);
-    io.emit("chat message", fullMsg);
+    saveMessages(data);
+    io.emit("chat message", msg);
 
-    // Push通知
-    await sendPush({
-      title: "新しいメッセージ",
-      body: `${msg.name}: ${msg.text}`,
-      time: fullMsg.time
+    // Push通知送信（自分以外）
+    subscriptions.forEach(sub => {
+      try {
+        webpush.sendNotification(sub, JSON.stringify({
+          title: msg.name,
+          body: msg.text
+        })).catch(err => console.error(err));
+      } catch(e){}
     });
   });
 
-  // 自分のメッセージ削除（userId基準）
+  // 削除リクエスト
   socket.on("requestDelete", (id) => {
     const user = users[socket.id];
-    if (!user) return;
+    if (!user) return socket.emit("deleteFailed", {id, reason:"not-joined"});
 
-    messages = messages.filter(
-      m => !(m.id === id && m.userId === user.userId)
-    );
+    let data = loadMessages();
+    const msg = data.find(m=>m.id===id);
+    if (!msg) return socket.emit("deleteFailed", {id, reason:"not-found"});
 
-    saveJSON(MESSAGE_FILE, messages);
+    if (msg.userId !== user.userId) return socket.emit("deleteFailed",{id, reason:"not-owner"});
+
+    data = data.filter(m=>m.id!==id);
+    saveMessages(data);
     io.emit("delete message", id);
   });
 
-  // 管理者：全削除
+  // 管理者全削除
   socket.on("adminClearAll", (password) => {
-    if (password !== ADMIN_PASSWORD) {
-      socket.emit("adminClearFailed", "password error");
-      return;
+    if (password !== ENTRY_PASSWORD) {
+      return socket.emit("adminClearFailed","管理者パスワードが違います");
     }
-
-    messages = [];
-    saveJSON(MESSAGE_FILE, messages);
+    saveMessages([]);
     io.emit("clearAllMessages");
+    console.log("Admin cleared all messages");
   });
 
   // 切断
   socket.on("disconnect", () => {
     delete users[socket.id];
     io.emit("userList", Object.values(users));
+    console.log("User disconnected:", socket.id);
   });
 });
 
-/* =========================
-   start
-========================= */
-server.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+// =========================
+// サーバー起動
+// =========================
+const PORT = process.env.PORT || 3000;
+http.listen(PORT, ()=>console.log("Server running on port "+PORT));
