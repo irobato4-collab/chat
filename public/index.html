@@ -6,7 +6,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>chat app</title>
-
+<script>
+  if (localStorage.getItem("auth") !== "ok") {
+    location.replace("/password.html");
+  }
+</script>
 
 <!-- ★ パスはすべて絶対パス -->
 <link rel="stylesheet" href="/style.css">
