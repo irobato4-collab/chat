@@ -1,108 +1,87 @@
 // index.js
+require("dotenv").config();
+
 const express = require("express");
 const app = express();
 const http = require("http").createServer(app);
 const io = require("socket.io")(http);
 const fs = require("fs");
-const path = require("path");
 
 app.use(express.static("public"));
 
 /* ===== 設定 ===== */
 const FILE = "messages.json";
 const MAX_MESSAGES = 100;
-const ADMIN_PASSWORD = "40311882"; // ← 必ず変更してください
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ENTRY_PASSWORD = process.env.ENTRY_PASSWORD;
 
-let users = {}; // socket.id -> { name, color, avatar }
+let users = {}; // socket.id -> { userId, name, color, avatar }
 
-/* ===== messages.json 安全読み込み ===== */
+/* ===== 認証 ===== */
+app.get("/auth", (req, res) => {
+  if (req.query.p === ENTRY_PASSWORD) {
+    res.json({ ok: true });
+  } else {
+    res.json({ ok: false });
+  }
+});
+
+/* ===== messages.json 安全処理 ===== */
 function loadMessages() {
   try {
     if (!fs.existsSync(FILE)) {
       fs.writeFileSync(FILE, "[]");
       return [];
     }
-    const raw = fs.readFileSync(FILE, "utf8");
-    if (!raw.trim()) return [];
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error("loadMessages error:", e);
+    return JSON.parse(fs.readFileSync(FILE, "utf8") || "[]");
+  } catch {
     fs.writeFileSync(FILE, "[]");
     return [];
   }
 }
 
 function saveMessages(data) {
-  fs.writeFileSync(FILE, JSON.stringify(data, null, 2), "utf8");
+  fs.writeFileSync(FILE, JSON.stringify(data.slice(-MAX_MESSAGES), null, 2));
 }
-
-/* ===== 起動時に履歴整理（100件超え防止） ===== */
-(function normalizeMessages() {
-  let data = loadMessages();
-  if (data.length > MAX_MESSAGES) {
-    data = data.slice(data.length - MAX_MESSAGES);
-    saveMessages(data);
-  }
-})();
 
 /* ===== socket.io ===== */
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("connect:", socket.id);
 
-  // 履歴送信
   socket.emit("history", loadMessages());
 
-  // ユーザー参加
   socket.on("userJoin", (user) => {
-    users[socket.id] = {
-      name: user.name,
-      color: user.color,
-      avatar: user.avatar || null
-    };
+    users[socket.id] = user;
     io.emit("userList", Object.values(users));
   });
 
-  // メッセージ受信
   socket.on("chat message", (msg) => {
-    let data = loadMessages();
+    const data = loadMessages();
 
-    data.push({
+    const saved = {
       id: msg.id,
+      userId: msg.userId,
       name: msg.name,
       color: msg.color,
       avatar: msg.avatar ?? null,
-      text: msg.text
-    });
+      text: msg.text,
+      timestamp: new Date().toISOString()
+    };
 
-    // ★ 100件を超えたら古い順に削除
-    while (data.length > MAX_MESSAGES) {
-      data.shift();
-    }
-
+    data.push(saved);
     saveMessages(data);
-    io.emit("chat message", msg);
+    io.emit("chat message", saved);
   });
 
-  // 個別削除（本人のみ）
   socket.on("requestDelete", (id) => {
-    const currentUser = users[socket.id];
-    if (!currentUser) {
-      socket.emit("deleteFailed", { id, reason: "not-joined" });
-      return;
-    }
+    const current = users[socket.id];
+    if (!current) return;
 
     let data = loadMessages();
     const msg = data.find(m => m.id === id);
-    if (!msg) {
-      socket.emit("deleteFailed", { id, reason: "not-found" });
-      return;
-    }
+    if (!msg) return;
 
-    const sameName = msg.name === currentUser.name;
-    const sameAvatar = (msg.avatar || null) === (currentUser.avatar || null);
-    const sameColor = msg.color === currentUser.color;
-
-    if (!(sameName && (sameAvatar || sameColor))) {
+    if (msg.userId !== current.userId) {
       socket.emit("deleteFailed", { id, reason: "not-owner" });
       return;
     }
@@ -112,28 +91,23 @@ io.on("connection", (socket) => {
     io.emit("delete message", id);
   });
 
-  // ★ 管理者：全削除
-  socket.on("adminClearAll", (password) => {
-    if (password !== ADMIN_PASSWORD) {
-      socket.emit("adminClearFailed", "管理者パスワードが違います");
+  socket.on("adminClearAll", (pw) => {
+    if (pw !== ADMIN_PASSWORD) {
+      socket.emit("adminClearFailed", "パスワード不一致");
       return;
     }
-
     saveMessages([]);
     io.emit("clearAllMessages");
-    console.log("Admin cleared all messages");
   });
 
-  // 切断処理
   socket.on("disconnect", () => {
     delete users[socket.id];
     io.emit("userList", Object.values(users));
-    console.log("User disconnected:", socket.id);
   });
 });
 
-/* ===== サーバー起動 ===== */
+/* ===== 起動 ===== */
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+  console.log("Server running:", PORT);
 });
