@@ -1,18 +1,17 @@
 {
-  "name": "nodejs",
+  "name": "chat-app",
   "version": "1.0.0",
-  "description": "",
+  "description": "Socket.io chat app with PWA push notifications",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "@types/node": "^22.13.11",
-    "express": "^5.2.1",
-    "pg": "^8.17.1",
-    "socket.io": "^4.8.1"
+    "express": "^4.18.2",
+    "socket.io": "^4.7.5",
+    "web-push": "^3.6.6"
   }
 }
