@@ -1,7 +1,11 @@
 /* =========================
    socket.io
 ========================= */
-const socket = io();
+const socket = io({
+  auth: {
+    auth: localStorage.getItem("auth")
+  }
+});
 
 /* =========================
    DOM
