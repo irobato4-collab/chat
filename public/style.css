@@ -323,3 +323,25 @@ body {
     max-width: 82%;
   }
 }
+/* 吹き出しサイズ調整 */
+.bubble {
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.4;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* メッセージ全体の横幅を制限 */
+.message {
+  max-width: 70%;
+}
+
+/* スマホ */
+@media (max-width: 640px) {
+  .message {
+    max-width: 82%;
+  }
+}
